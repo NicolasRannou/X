@@ -33,6 +33,7 @@ goog.provide('X.renderer2D');
 goog.require('X.renderer');
 goog.require('goog.math.Vec3');
 goog.require('goog.vec.Vec4');
+goog.require('goog.vec.Mat3');
 
 
 /**
@@ -788,6 +789,84 @@ X.renderer2D.prototype.onSliceNavigation = function() {
 
 };
 
+X.renderer2D.prototype.computeScreenToPlane = function() {
+
+  this._screenToPlane = goog.vec.Mat3.createFloat32Identity();
+
+  var _view = this._camera._view;
+  // scale
+  // alway > 0
+  // this represents how much we zoom
+  this._normalizedScale = Math.max(_view[14], 0.0001);
+  var tmpScale = goog.vec.Mat3.createFloat32Identity();
+  tmpScale = goog.vec.Mat3.makeScale(tmpScale, this._normalizedScale, this._normalizedScale, 1);
+
+  // translation
+  // this one represents how much we pan
+  // actual panning + make (0,0) in center of screen
+  var _x = 1 * _view[12] + this._width / 2 /this._normalizedScale;
+  var _y = -1 * _view[13] + this._height / 2 /this._normalizedScale;
+
+  var tmpTranslate = goog.vec.Mat3.createFloat32Identity();
+  tmpTranslate = goog.vec.Mat3.makeTranslate(tmpTranslate, _x, _y, 1);
+
+  goog.vec.Mat3.multMat(tmpScale, tmpTranslate, this._screenToPlane);
+
+  this._planeToScreen = goog.vec.Mat3.createFloat32Identity();
+  goog.vec.Mat3.invert(this._screenToPlane, this._planeToScreen);
+
+}
+
+X.renderer2D.prototype.computePlaneToTexture = function() {
+
+  this._planeToTexture = goog.vec.Mat3.createFloat32Identity();
+
+  // add axes flips
+  // basically just * -1 where we want to flip something
+  var _xFlip = 1;
+  var _yFlip = 1;
+  if (this._orientation == "Y") {
+    // invert cols
+    _xFlip = -1;
+  }
+  else if (this._orientation == "Z") {
+    // invert all
+    _xFlip = -1;
+    _yFlip = -1;
+  }
+
+  var tmpFlip = goog.vec.Mat3.createFloat32Identity();
+  tmpFlip = goog.vec.Mat3.makeScale(tmpFlip, _xFlip, _yFlip, 1);
+
+  // add rotation against Z axis if needed (X view)
+  var _angle = 0;
+  if (this._orientation == "X") {
+    _angle = Math.PI/2;
+  }
+
+  var tmpRotate = goog.vec.Mat3.createFloat32Identity();
+  tmpRotate = goog.vec.Mat3.makeRotateZ(tmpRotate, _angle);
+
+  goog.vec.Mat3.multMat(tmpRotate, tmpFlip, this._planeToTexture);
+
+  this._textureToPlane = goog.vec.Mat3.createFloat32Identity();
+  var success = goog.vec.Mat3.invert(this._planeToTexture, this._textureToPlane);
+
+}
+
+X.renderer2D.prototype.computeScreenToTexture = function() {
+
+  this._screenToTexture = goog.vec.Mat3.createFloat32Identity();
+
+  this.computeScreenToPlane();
+  this.computePlaneToTexture();
+
+  goog.vec.Mat3.multMat(this._screenToPlane, this._planeToTexture, this._screenToTexture);
+
+  this._textureToScreen = goog.vec.Mat3.createFloat32Identity();
+  goog.vec.Mat3.invert(this._screenToTexture, this._textureToScreen);
+}
+
 
 /**
  * Convert viewport (canvas) coordinates to volume (index) coordinates.
@@ -828,28 +907,51 @@ X.renderer2D.prototype.xy2ijk = function(x, y) {
 
   } else {
     _currentSlice = this._slices[parseInt(_volume['indexX'], 10)];
-    _sliceWSpacing = _currentSlice._heightSpacing;
-    _sliceHSpacing = _currentSlice._widthSpacing;
+    _sliceWSpacing = _currentSlice._widthSpacing;
+    _sliceHSpacing = _currentSlice._heightSpacing;
     this._orientationColors[0] = 'rgba(0,255,0,.3)';
     this._orientationColors[1] = 'rgba(0,0,255,.3)';
-
-    var _buf = _sliceWidth;
-    _sliceWidth = _sliceHeight;
-    _sliceHeight = _buf;
   }
 
+  // transform screen to plane coordinates system
+  this.computeScreenToTexture();
+  var _screenCoordinates = goog.vec.Vec3.createFromValues(x, y, 1);
+  var _planeCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
+  goog.vec.Mat3.multVec3(this._planeToScreen, _screenCoordinates, _planeCoordinates);
+
+  // transform plane to texture coordinates system
+  var _textureCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
+  goog.vec.Mat3.multVec3(this._textureToPlane, _planeCoordinates, _textureCoordinates);
+
+  var _offset_x = this._sliceWidth * this._sliceWidthSpacing / 2;
+  var _offset_y = this._sliceHeight * this._sliceHeightSpacing / 2;
+  var _offsetCoordinates = goog.vec.Vec3.createFromValues(_offset_x, _offset_y, 0);
+
+  var _correctedCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
+  goog.vec.Vec3.add(_textureCoordinates, _offsetCoordinates, _correctedCoordinates);
+
+  // normalize textures coordinates
+  var _sliceWidthScaled = _sliceWidth * _sliceWSpacing;
+  var _sliceHeightScaled = _sliceHeight * _sliceHSpacing;
+
+  var _z = _currentSlice._xyBBox[4];
+  var _xyz = goog.vec.Vec4.createFloat32FromValues(_correctedCoordinates[0] + _currentSlice._xyBBox[0], _correctedCoordinates[1] + _currentSlice._xyBBox[2], _z, 1);
+  var _ijk = goog.vec.Mat4.createFloat32();
+  goog.vec.Mat4.multVec4(_currentSlice._XYToIJK, _xyz, _ijk);
+
+  _ijk = [Math.floor(_ijk[0]),Math.floor(_ijk[1]),Math.floor(_ijk[2])];
+
+  // why < 0??
+  var _ras = goog.vec.Mat4.createFloat32();
+  goog.vec.Mat4.multVec4(_currentSlice._XYToRAS, _xyz, _ras);
+
+   // not necessary
   // padding offsets
   var _x = 1 * _view[12];
   var _y = -1 * _view[13]; // we need to flip y here
 
   // .. and zoom
   var _center = [this._width / 2, this._height / 2];
-
-  // the slice dimensions in canvas coordinates
-  var _sliceWidthScaled = _sliceWidth * _sliceWSpacing *
-    this._normalizedScale;
-  var _sliceHeightScaled = _sliceHeight * _sliceHSpacing *
-    this._normalizedScale;
 
   // the image borders on the left and top in canvas coordinates
   var _image_left2xy = _center[0] - (_sliceWidthScaled / 2);
@@ -859,99 +961,51 @@ X.renderer2D.prototype.xy2ijk = function(x, y) {
   _image_left2xy += _x * this._normalizedScale;
   _image_top2xy += _y * this._normalizedScale;
 
-  if(x>_image_left2xy && x < _image_left2xy + _sliceWidthScaled &&
-    y>_image_top2xy && y < _image_top2xy + _sliceHeightScaled){
-
-    var _xNorm = (x - _image_left2xy)/ _sliceWidthScaled;
-    var _yNorm = (y - _image_top2xy)/ _sliceHeightScaled;
-
-    _x = _xNorm*_sliceWidth;
-    _y = _yNorm*_sliceHeight;
-    var _z = _currentSlice._xyBBox[4];
-
-    if (this._orientation == "X") {
-      // invert cols
-      // then invert x and y to compensate camera +90d rotation
-      _x = _sliceWidth - _x;
-
-      var _buf = _x;
-      _x = _y;
-      _y = _buf;
-
-    }
-    else if (this._orientation == "Y") {
-
-      // invert cols
-      _x = _sliceWidth - _x;
-
-    }
-    else if (this._orientation == "Z") {
-
-      // invert all
-      _x = _sliceWidth - _x;
-      _y = _sliceHeight - _y;
-
-    }
-
-    // map indices to xy coordinates
-    _x = _currentSlice._wmin + _x*_currentSlice._widthSpacing;// - _currentSlice._widthSpacing/2;
-    _y = _currentSlice._hmin + _y*_currentSlice._heightSpacing;// - _currentSlice._heightSpacing/2;
-
-    var _xyz = goog.vec.Vec4.createFloat32FromValues(_x, _y, _z, 1);
-    var _ijk = goog.vec.Mat4.createFloat32();
-    goog.vec.Mat4.multVec4(_currentSlice._XYToIJK, _xyz, _ijk);
-
-    _ijk = [Math.floor(_ijk[0]),Math.floor(_ijk[1]),Math.floor(_ijk[2])];
-    // why < 0??
-    var _ras = goog.vec.Mat4.createFloat32();
-    goog.vec.Mat4.multVec4(_currentSlice._XYToRAS, _xyz, _ras);
-
-    var _dx = _volume._childrenInfo[0]._sliceNormal[0]*_ras[0]
-      + _volume._childrenInfo[0]._sliceNormal[1]*_ras[1]
-      + _volume._childrenInfo[0]._sliceNormal[2]*_ras[2]
-      + _volume._childrenInfo[0]._originD;
-
-    var _ix = Math.round(_dx/_volume._childrenInfo[0]._sliceSpacing);
-     if(_ix >= _volume._childrenInfo[0]._nb){
-       _ix = _volume._childrenInfo[0]._nb - 1;
-     }
-     else if(_ix < 0){
-       _ix = 0;
-      }
 
 
-    var _dy = _volume._childrenInfo[1]._sliceNormal[0]*_ras[0]
-      + _volume._childrenInfo[1]._sliceNormal[1]*_ras[1]
-      + _volume._childrenInfo[1]._sliceNormal[2]*_ras[2]
-      + _volume._childrenInfo[1]._originD;
+  var _dx = _volume._childrenInfo[0]._sliceNormal[0]*_ras[0]
+    + _volume._childrenInfo[0]._sliceNormal[1]*_ras[1]
+    + _volume._childrenInfo[0]._sliceNormal[2]*_ras[2]
+    + _volume._childrenInfo[0]._originD;
 
-    var _iy = Math.round(_dy/_volume._childrenInfo[1]._sliceSpacing);
-    if(_iy >= _volume._childrenInfo[1]._nb){
-       _iy = _volume._childrenInfo[1]._nb - 1;
-    }
-    else if(_iy < 0) {
-      _iy = 0;
-    }
+  var _ix = Math.round(_dx/_volume._childrenInfo[0]._sliceSpacing);
+  if(_ix >= _volume._childrenInfo[0]._nb){
+    _ix = _volume._childrenInfo[0]._nb - 1;
+  }
+  else if(_ix < 0){
+    _ix = 0;
+  }
 
-    // get plane distance from the origin
-    var _dz = _volume._childrenInfo[2]._sliceNormal[0]*_ras[0]
-      + _volume._childrenInfo[2]._sliceNormal[1]*_ras[1]
-      + _volume._childrenInfo[2]._sliceNormal[2]*_ras[2]
-      + _volume._childrenInfo[2]._originD;
 
-    var _iz = Math.round(_dz/_volume._childrenInfo[2]._sliceSpacing);
-    if(_iz >= _volume._childrenInfo[2]._nb){
-      _iz = _volume._childrenInfo[2]._nb - 1;
-    }
-    else if(_iz < 0){
-      // translate origin by distance
-      _iz = 0;
-    }
+  var _dy = _volume._childrenInfo[1]._sliceNormal[0]*_ras[0]
+    + _volume._childrenInfo[1]._sliceNormal[1]*_ras[1]
+    + _volume._childrenInfo[1]._sliceNormal[2]*_ras[2]
+    + _volume._childrenInfo[1]._originD;
 
-    return [[_ix, _iy, _iz], [_ijk[0], _ijk[1], _ijk[2]], [_ras[0], _ras[1], _ras[2]]];
-    }
+  var _iy = Math.round(_dy/_volume._childrenInfo[1]._sliceSpacing);
+  if(_iy >= _volume._childrenInfo[1]._nb){
+    _iy = _volume._childrenInfo[1]._nb - 1;
+  }
+  else if(_iy < 0) {
+    _iy = 0;
+  }
 
-  return null;
+  // get plane distance from the origin
+  var _dz = _volume._childrenInfo[2]._sliceNormal[0]*_ras[0]
+    + _volume._childrenInfo[2]._sliceNormal[1]*_ras[1]
+    + _volume._childrenInfo[2]._sliceNormal[2]*_ras[2]
+    + _volume._childrenInfo[2]._originD;
+
+  var _iz = Math.round(_dz/_volume._childrenInfo[2]._sliceSpacing);
+  if(_iz >= _volume._childrenInfo[2]._nb){
+    _iz = _volume._childrenInfo[2]._nb - 1;
+  }
+  else if(_iz < 0){
+    // translate origin by distance
+    _iz = 0;
+  }
+
+  return [[_ix, _iy, _iz], [_ijk[0], _ijk[1], _ijk[2]], [_ras[0], _ras[1], _ras[2]]];
 };
 
 
@@ -992,41 +1046,17 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   }
   
   //if slice do not exist yet, we have to set slice dimensions
-  var _width2 = this._slices[parseInt(_currentSlice, 10)]._iWidth;
-  var _height2 = this._slices[parseInt(_currentSlice, 10)]._iHeight;
+  this._sliceWidth = this._slices[parseInt(_currentSlice, 10)]._iWidth;
+  this._sliceHeight = this._slices[parseInt(_currentSlice, 10)]._iHeight;
   // spacing
   this._sliceWidthSpacing = this._slices[parseInt(_currentSlice, 10)]._widthSpacing;
   this._sliceHeightSpacing = this._slices[parseInt(_currentSlice, 10)]._heightSpacing;
 
-  // .. and store the dimensions
-  this._sliceWidth = _width2;
-  this._sliceHeight = _height2;
-  //
-  // grab the camera settings
-
-  //
-  // viewport size
-  var _width = this._width;
-  var _height = this._height;
-
-  // first grab the view matrix which is 4x4 in favor of the 3D renderer
-  var _view = this._camera._view;
-
   // clear the canvas
   this._context.save();
-  this._context.clearRect(-_width, -_height, 2 * _width, 2 * _height);
+  this._context.clearRect(-this._width, -this._height, 2 * this._width, 2 * this._height);
   this._context.restore();
 
-  // transform the canvas according to the view matrix
-  // .. this includes zoom
-  this._normalizedScale = Math.max(_view[14], 0.0001);
-
-  this._context.setTransform(this._normalizedScale, 0, 0, this._normalizedScale, 0, 0);
-
-  // .. and pan
-  // we need to flip y here
-  var _x = 1 * _view[12];
-  var _y = -1 * _view[13];
   //
   // grab the volume and current slice
   //
@@ -1083,6 +1113,9 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   // - if the threshold has changed
   // - if the window/level has changed
   // - the labelmap show only color has changed
+
+  //
+  // should check zoom too, to increase resolution!
   var _redraw_required = (this._currentSlice != _currentSlice ||
       this._lowerThreshold != _lowerThreshold ||
       this._upperThreshold != _upperThreshold ||
@@ -1093,12 +1126,15 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
     // update FBs with new size
     // has to be there, not sure why, too slow to be in main loop?
      var _frameBuffer = this._frameBuffer;
-    _frameBuffer.width = _width2;
-    _frameBuffer.height = _height2;
+    _frameBuffer.width = this._sliceWidth;
+    _frameBuffer.height = this._sliceHeight;
 
     var _frameBuffer2 = this._labelFrameBuffer;
-    _frameBuffer2.width = _width2;
-    _frameBuffer2.height = _height2;
+    _frameBuffer2.width = this._sliceHeight;
+    _frameBuffer2.height = this._sliceHeight;
+
+    window.console.log(this._sliceWidth);
+    window.console.log(this._sliceHeight);
 
     // loop through the pixels and draw them to the invisible canvas
     // from bottom right up
@@ -1177,44 +1213,14 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
 
       }
 
-      if(this._orientation == "X"){
-        // invert nothing
-        _pixels[_index] = _color[0]; // r
-        _pixels[_index + 1] = _color[1]; // g
-        _pixels[_index + 2] = _color[2]; // b
-        _pixels[_index + 3] = _color[3]; // a
-        _labelPixels[_index] = _label[0]; // r
-        _labelPixels[_index + 1] = _label[1]; // g
-        _labelPixels[_index + 2] = _label[2]; // b
-        _labelPixels[_index + 3] = _label[3]; // a
-      }
-      else if(this._orientation == "Y"){
-        // invert cols
-        var row = Math.floor(_index/(_sliceWidth*4));
-        var col = _index - row*_sliceWidth*4;
-        var invCol = 4*(_sliceWidth-1) - col ;
-        var _invertedColsIndex = row*_sliceWidth*4 + invCol;
-        _pixels[_invertedColsIndex] = _color[0]; // r
-        _pixels[_invertedColsIndex + 1] = _color[1]; // g
-        _pixels[_invertedColsIndex + 2] = _color[2]; // b
-        _pixels[_invertedColsIndex + 3] = _color[3]; // a
-        _labelPixels[_invertedColsIndex] = _label[0]; // r
-        _labelPixels[_invertedColsIndex + 1] = _label[1]; // g
-        _labelPixels[_invertedColsIndex + 2] = _label[2]; // b
-        _labelPixels[_invertedColsIndex + 3] = _label[3]; // a
-      }
-      else{
-        // invert all
-        var _invertedIndex = _pixelsLength - 1 - _index;
-        _pixels[_invertedIndex - 3] = _color[0]; // r
-        _pixels[_invertedIndex - 2] = _color[1]; // g
-        _pixels[_invertedIndex - 1] = _color[2]; // b
-        _pixels[_invertedIndex] = _color[3]; // a
-        _labelPixels[_invertedIndex - 3] = _label[0]; // r
-        _labelPixels[_invertedIndex - 2] = _label[1]; // g
-        _labelPixels[_invertedIndex - 1] = _label[2]; // b
-        _labelPixels[_invertedIndex] = _label[3]; // a
-      }
+      _pixels[_index] = _color[0]; // r
+      _pixels[_index + 1] = _color[1]; // g
+      _pixels[_index + 2] = _color[2]; // b
+      _pixels[_index + 3] = _color[3]; // a
+      _labelPixels[_index] = _label[0]; // r
+      _labelPixels[_index + 1] = _label[1]; // g
+      _labelPixels[_index + 2] = _label[2]; // b
+      _labelPixels[_index + 3] = _label[3]; // a
 
       _index += 4; // increase by 4 units for r,g,b,a
 
@@ -1249,26 +1255,58 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   // context
   this._context.globalAlpha = 1.0; // draw fully opaque}
 
-  // move to the middle
-  this._context.translate(_width / 2 /this._normalizedScale, _height / 2 /
-      this._normalizedScale);
 
-  // Rotate the Sagittal viewer
-  if(this._orientation == "X") {
+  // first grab the view matrix which is 4x4 in favor of the 3D renderer
+  var _view = this._camera._view;
+  // update transform
+  // transform view port
+  this.computeScreenToPlane();
+  // apply transform
+  // http://www.w3.org/TR/2dcontext/#transformations
+  this._context.setTransform(
+    goog.vec.Mat3.getElement(this._screenToPlane, 0, 0),
+    goog.vec.Mat3.getElement(this._screenToPlane, 1, 0),
+    goog.vec.Mat3.getElement(this._screenToPlane, 0, 1),
+    goog.vec.Mat3.getElement(this._screenToPlane, 1, 1),
+    goog.vec.Mat3.getElement(this._screenToPlane, 0, 2),
+    goog.vec.Mat3.getElement(this._screenToPlane, 1, 2)
+  );
 
-    this._context.rotate(Math.PI * 0.5);
+  this.computePlaneToTexture();
+  // apply transform
+  // http://www.w3.org/TR/2dcontext/#transformations
+  this._context.transform(
+    goog.vec.Mat3.getElement(this._planeToTexture, 0, 0),
+    goog.vec.Mat3.getElement(this._planeToTexture, 1, 0),
+    goog.vec.Mat3.getElement(this._planeToTexture, 0, 1),
+    goog.vec.Mat3.getElement(this._planeToTexture, 1, 1),
+    goog.vec.Mat3.getElement(this._planeToTexture, 0, 2),
+    goog.vec.Mat3.getElement(this._planeToTexture, 1, 2)
+  );
 
-    var _buf = _x;
-    _x = _y;
-    _y = -_buf;
+  // should be working....
+  // this.computeScreenToTexture();
+  // // apply transform
+  // // http://www.w3.org/TR/2dcontext/#transformations
+  // this._context.setTransform(
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 0),
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 0),
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 1),
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 1),
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 2),
+  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 2)
+  // );
 
-  }
-
-  var _offset_x = -_sliceWidth * this._sliceWidthSpacing / 2 + _x;
-  var _offset_y = -_sliceHeight * this._sliceHeightSpacing / 2 + _y;
+  // draw image in middle of the screen
+  var _offset_x = -_sliceWidth * this._sliceWidthSpacing / 2;
+  var _offset_y = -_sliceHeight * this._sliceHeightSpacing / 2;
 
   // draw the slice
   this._context.drawImage(this._frameBuffer, _offset_x, _offset_y, _sliceWidth *
+      this._sliceWidthSpacing, _sliceHeight * this._sliceHeightSpacing);
+  // draw the border
+  this._context.strokeStyle="#FF0000";
+  this._context.strokeRect(_offset_x, _offset_y, _sliceWidth *
       this._sliceWidthSpacing, _sliceHeight * this._sliceHeightSpacing);
 
   // draw the labels with a configured opacity
@@ -1393,6 +1431,10 @@ goog.exportSymbol('X.renderer2D.prototype.resetViewAndRender',
     X.renderer2D.prototype.resetViewAndRender);
 goog.exportSymbol('X.renderer2D.prototype.xy2ijk',
     X.renderer2D.prototype.xy2ijk);
+goog.exportSymbol('X.renderer2D.prototype.computeScreenToPlane',
+    X.renderer2D.prototype.computeScreenToPlane);
+goog.exportSymbol('X.renderer2D.prototype.screenToPlane',
+    X.renderer2D.prototype.screenToPlane);
 goog.exportSymbol('X.renderer2D.prototype.render',
     X.renderer2D.prototype.render);
 goog.exportSymbol('X.renderer2D.prototype.destroy',
