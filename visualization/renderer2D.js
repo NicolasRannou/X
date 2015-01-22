@@ -867,6 +867,87 @@ X.renderer2D.prototype.computeScreenToTexture = function() {
   goog.vec.Mat3.invert(this._screenToTexture, this._textureToScreen);
 }
 
+X.renderer2D.prototype.xy2ijkOptimizedSetup = function(){
+  // window.console.log(x,y);
+
+  // un-zoom and un-offset
+  // there get coordinates in a normla view
+
+    var _volume = this._topLevelObjects[0];
+  var _currentSlice = null;
+  if (this._orientation == "Y") {
+    _currentSlice = this._slices[parseInt(_volume['indexY'], 10)];
+  } else if (this._orientation == "Z") {
+    _currentSlice = this._slices[parseInt(_volume['indexZ'], 10)];
+  } else {
+    _currentSlice = this._slices[parseInt(_volume['indexX'], 10)];
+  }
+
+  var _sliceWidth = this._sliceWidth;
+  var _sliceHeight = this._sliceHeight;
+  var _sliceWSpacing = this._sliceWidthSpacing ;
+  var _sliceHSpacing = this._sliceHeightSpacing;
+
+  //
+  // create 4x4 matrix from 3x3
+  this._textureToScreen4x4 = goog.vec.Mat4.createFloat32FromValues(
+    goog.vec.Mat3.getElement(this._textureToScreen, 0, 0),
+    goog.vec.Mat3.getElement(this._textureToScreen, 1, 0),
+    0,
+    goog.vec.Mat3.getElement(this._textureToScreen, 2, 0),
+    goog.vec.Mat3.getElement(this._textureToScreen, 0, 1),
+    goog.vec.Mat3.getElement(this._textureToScreen, 1, 1),
+    0,
+    goog.vec.Mat3.getElement(this._textureToScreen, 2, 1),
+    0,
+    0,
+    1,
+    0,
+    goog.vec.Mat3.getElement(this._textureToScreen, 0, 2),
+    goog.vec.Mat3.getElement(this._textureToScreen, 1, 2),
+    0,
+    goog.vec.Mat3.getElement(this._textureToScreen, 2, 2));
+
+  var _offset_x = this._sliceWidth * this._sliceWidthSpacing / 2;
+  var _offset_y = this._sliceHeight * this._sliceHeightSpacing / 2;
+  var translate = goog.vec.Mat4.createFloat32FromValues(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, _currentSlice._xyBBox[0] + _offset_x, _currentSlice._xyBBox[2] + _offset_y, 0, 1);
+
+  this._translateToScreen4x4 = goog.vec.Mat4.createFloat32();
+  goog.vec.Mat4.multMat(translate, this._textureToScreen4x4, this._translateToScreen4x4);
+
+  this._ijkToScreen4x4 = goog.vec.Mat4.createFloat32();
+  goog.vec.Mat4.multMat(_currentSlice._XYToIJK, this._translateToScreen4x4, this._ijkToScreen4x4);
+  // window.console.log(this._textureToScreen4x4);
+  // window.console.log(this._textureToScreen);
+
+
+  this._screenToIJK = [];
+
+  return _currentSlice;
+}
+
+X.renderer2D.prototype.xy2ijkOptimized = function(x, y, z) {
+
+  // var _screenCoordinates4 = goog.vec.Vec4.createFromValues(x, y, z, 1);
+  // var _translateCoordinates4 = goog.vec.Vec4.createFromValues(0, 0, 0,0);
+  // goog.vec.Mat4.multVec4(this._translateToScreen4x4, _screenCoordinates4, _translateCoordinates4);
+
+  // window.console.log(_translateCoordinates4[3]);
+  
+  // var _xyz = goog.vec.Vec4.createFloat32FromValues(_translateCoordinates4[0], _translateCoordinates4[1], _translateCoordinates4[2], 1);
+  // var _ijk = goog.vec.Vec4.createFloat32();
+  // goog.vec.Mat4.multVec4(_XYToIJK, _xyz, _ijk);
+
+  // window.console.log(_ijk);
+
+  var _screenCoordinates4 = goog.vec.Vec4.createFromValues(x, y, z, 1);
+  var _ijk = goog.vec.Vec4.createFloat32();
+  goog.vec.Mat4.multVec4(this._ijkToScreen4x4, _screenCoordinates4, _ijk);
+
+    // window.console.log(_ijk);
+
+  return _ijk = [Math.round(_ijk[0]),Math.round(_ijk[1]),Math.round(_ijk[2])];
+};
 
 /**
  * Convert viewport (canvas) coordinates to volume (index) coordinates.
@@ -876,6 +957,8 @@ X.renderer2D.prototype.computeScreenToTexture = function() {
  * @return {?Array} An array of [i,j,k] coordinates or null if out of frame.
  */
 X.renderer2D.prototype.xy2ijk = function(x, y) {
+
+  // window.console.log(x,y);
 
   // un-zoom and un-offset
   // there get coordinates in a normla view
@@ -893,35 +976,36 @@ X.renderer2D.prototype.xy2ijk = function(x, y) {
   // which color?
   if (this._orientation == "Y") {
     _currentSlice = this._slices[parseInt(_volume['indexY'], 10)];
-    _sliceWSpacing = _currentSlice._widthSpacing;
-    _sliceHSpacing = _currentSlice._heightSpacing;
     this._orientationColors[0] = 'rgba(255,0,0,.3)';
     this._orientationColors[1] = 'rgba(0,0,255,.3)';
 
   } else if (this._orientation == "Z") {
     _currentSlice = this._slices[parseInt(_volume['indexZ'], 10)];
-    _sliceWSpacing = _currentSlice._widthSpacing;
-    _sliceHSpacing = _currentSlice._heightSpacing;
     this._orientationColors[0] = 'rgba(255,0,0,.3)';
     this._orientationColors[1] = 'rgba(0,255,0,.3)';
 
   } else {
     _currentSlice = this._slices[parseInt(_volume['indexX'], 10)];
-    _sliceWSpacing = _currentSlice._widthSpacing;
-    _sliceHSpacing = _currentSlice._heightSpacing;
     this._orientationColors[0] = 'rgba(0,255,0,.3)';
     this._orientationColors[1] = 'rgba(0,0,255,.3)';
   }
 
-  // transform screen to plane coordinates system
-  this.computeScreenToTexture();
-  var _screenCoordinates = goog.vec.Vec3.createFromValues(x, y, 1);
-  var _planeCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
-  goog.vec.Mat3.multVec3(this._planeToScreen, _screenCoordinates, _planeCoordinates);
+  _sliceWSpacing = _currentSlice._widthSpacing;
+  _sliceHSpacing = _currentSlice._heightSpacing;
 
-  // transform plane to texture coordinates system
+  // transform screen to plane coordinates system
+  // this.computeScreenToTexture();
+  var _screenCoordinates = goog.vec.Vec3.createFromValues(x, y, 1);
   var _textureCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
-  goog.vec.Mat3.multVec3(this._textureToPlane, _planeCoordinates, _textureCoordinates);
+  goog.vec.Mat3.multVec3(this._textureToScreen, _screenCoordinates, _textureCoordinates);
+
+  //   var _screenCoordinates = goog.vec.Vec3.createFromValues(x, y, 1);
+  // var _planeCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
+  // goog.vec.Mat3.multVec3(this._texture, _screenCoordinates, _planeCoordinates);
+
+  // // transform plane to texture coordinates system
+  // var _textureCoordinates = goog.vec.Vec3.createFromValues(0, 0, 0);
+  // goog.vec.Mat3.multVec3(this._textureToPlane, _planeCoordinates, _textureCoordinates);
 
   var _offset_x = this._sliceWidth * this._sliceWidthSpacing / 2;
   var _offset_y = this._sliceHeight * this._sliceHeightSpacing / 2;
@@ -1089,16 +1173,16 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   // FRAME BUFFERING
   //
   var _imageFBContext = this._frameBufferContext;
-  var _labelFBContext = this._labelFrameBufferContext;
+  //var _labelFBContext = this._labelFrameBufferContext;
 
   // grab the current pixels
-  var _imageData = _imageFBContext
-      .getImageData(0, 0, _sliceWidth, _sliceHeight);
-  var _labelmapData = _labelFBContext.getImageData(0, 0, _sliceWidth,
-      _sliceHeight);
-  var _pixels = _imageData.data;
-  var _labelPixels = _labelmapData.data;
-  var _pixelsLength = _pixels.length;
+  // var _imageData = _imageFBContext
+  //     .getImageData(0, 0, _sliceWidth, _sliceHeight);
+  //var _labelmapData = _labelFBContext.getImageData(0, 0, _sliceWidth,
+  //    _sliceHeight);
+  // var _pixels = _imageData.data;
+  // //var _labelPixels = _labelmapData.data;
+  // var _pixelsLength = _pixels.length;
 
   // threshold values
   var _maxScalarRange = _volume._max;
@@ -1107,128 +1191,234 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   var _windowLow = _volume._windowLow;
   var _windowHigh = _volume._windowHigh;
 
+  if(!this.canvas2){
+    this.canvas2 = document.createElement('canvas');
+    this.context2 = this.canvas2.getContext('2d');
+  }
+  
   // caching mechanism
   // we need to redraw the pixels only
   // - if the _currentSlice has changed
   // - if the threshold has changed
   // - if the window/level has changed
   // - the labelmap show only color has changed
-
   //
   // should check zoom too, to increase resolution!
+  //
+
   var _redraw_required = (this._currentSlice != _currentSlice ||
       this._lowerThreshold != _lowerThreshold ||
       this._upperThreshold != _upperThreshold ||
       this._windowLow != _windowLow || this._windowHigh != _windowHigh || (_labelmapShowOnlyColor && !X.array
       .compare(_labelmapShowOnlyColor, this._labelmapShowOnlyColor, 0, 0, 4)));
 
+  _redraw_required = true;
+
+  this.computeScreenToTexture();
+
   if (_redraw_required) {
     // update FBs with new size
     // has to be there, not sure why, too slow to be in main loop?
-     var _frameBuffer = this._frameBuffer;
-    _frameBuffer.width = this._sliceWidth;
-    _frameBuffer.height = this._sliceHeight;
+    // maybe should now be the number of pixels!
 
-    var _frameBuffer2 = this._labelFrameBuffer;
-    _frameBuffer2.width = this._sliceHeight;
-    _frameBuffer2.height = this._sliceHeight;
+    // window.console.log(this._sliceWidth);
+    // window.console.log(this._sliceHeight);
 
-    window.console.log(this._sliceWidth);
-    window.console.log(this._sliceHeight);
+    // border of the image
+    // draw image in middle of the screen
+    var _xmin = -_sliceWidth * this._sliceWidthSpacing / 2;
+    var _xmax = _sliceWidth * this._sliceWidthSpacing / 2;
+    var _ymin = -_sliceHeight * this._sliceHeightSpacing / 2;
+    var _ymax = _sliceHeight * this._sliceHeightSpacing / 2;
+
+    // window.console.log(_xmin, _ymin);
+    // window.console.log(_xmax, _ymax);
+
+    
+
+    var _textureCoordinates = goog.vec.Vec3.createFromValues(_xmin, _ymin, 1);
+    var _screenCoordinatesMin = goog.vec.Vec3.createFromValues(0, 0, 0);
+    goog.vec.Mat3.multVec3(this._screenToTexture, _textureCoordinates, _screenCoordinatesMin);
+
+    var _textureCoordinates = goog.vec.Vec3.createFromValues(_xmax, _ymax, 1);
+    var _screenCoordinatesMax = goog.vec.Vec3.createFromValues(0, 0, 0);
+    goog.vec.Mat3.multVec3(this._screenToTexture, _textureCoordinates, _screenCoordinatesMax);
+
+    // window.console.log(_screenCoordinatesMin);
+    // window.console.log(_screenCoordinatesMax);
+
+    var screenX = [Math.floor(_screenCoordinatesMin[0]), Math.ceil(_screenCoordinatesMax[0])];
+    var screenY = [Math.floor(_screenCoordinatesMin[1]), Math.ceil(_screenCoordinatesMax[1])];
+
+    // fill the texture by iterating from min to max!
+    var _lengthX = Math.abs(screenX[1] - screenX[0]);
+    var _stepX = (screenX[0] < screenX[1]) ? 1 : -1;
+
+    var _lengthY = Math.abs(screenY[1] - screenY[0]);
+    var _stepY = (screenY[0] < screenY[1]) ? 1 : -1;
+
+    var factor = 1;
+    _lengthX /= factor;
+    _lengthY /= factor;
+    _stepX *= factor;
+    _stepY *= factor;
+
+
+    // all info we need now
+    this._frameBuffer.width = _lengthX;
+    this._frameBuffer.height = _lengthY;
+
+    // .. and the context
+    this._frameBufferContext = this._frameBuffer.getContext('2d');
+
+    // this._frameBufferContext = this._frameBuffer.getContext('2d');
+
+    this._frameBufferContext.fillStyle = '#FFF000';
+    this._frameBufferContext.strokeStyle="#FF00FF";
+    this._frameBufferContext.beginPath();
+
+  this.canvas2.width = _lengthX;
+this.canvas2.height = _lengthY;
+// this.context2.fillStyle = 'white';
+// this.context2.fillRect(0,0, _lengthX, _lengthY);
+var imagedata = this.context2.getImageData(0,0,_lengthX, _lengthY);
+ // window.console.log(imagedata);
+ var data = imagedata.data;
+        //grayscaleRenderCanvasData = grayscaleRenderCanvasContext.getImageData(0,0,image.width, image.height);
+
+// to canvas image!
+
+    var index = 0;
+
+    var curSlice = this.xy2ijkOptimizedSetup();
+    // fill rows first!
+    for(var j = 0; j < _lengthY; j++){
+    for(var i = 0; i < _lengthX; i++){
+      
+
+        // map to screen coordinates
+        var _xMapped = screenX[0] + i*_stepX;
+        var _yMapped = screenY[0] + j*_stepY;
+
+        // get actual ijk value for this pixel!
+        var ijk = this.xy2ijkOptimized(_xMapped, _yMapped, curSlice._xyBBox[4]);
+        var value = 0;
+
+        if(typeof _volume._IJKVolumeN[ijk[2]] != 'undefined' && typeof _volume._IJKVolumeN[ijk[2]][ijk[1]] != 'undefined' && typeof _volume._IJKVolumeN[ijk[2]][ijk[1]][ijk[0]] != 'undefined'){
+          value = _volume._IJKVolumeN[ijk[2]][ijk[1]][ijk[0]];
+        }
+
+        data[index++] = data[index++] = data[index++] = value;
+        //255;//Math.floor( Math.random() * 255 );//value; // r
+        //data[index++] = value;//255;//Math.floor( Math.random() * 255 );//value; // g
+        //data[index++] = value;//255;//Math.floor( Math.random() * 255 );//value; // b
+        data[index++] = 255; // a
+
+        // window.console.log(index, value);
+
+        // window.console.log(_value);
+
+        // window.console.log(_xMapped, _yMapped);
+      }
+    }
+
+    // window.console.log(index);
+
+    this.context2.putImageData(imagedata, 0, 0);
 
     // loop through the pixels and draw them to the invisible canvas
     // from bottom right up
     // also apply thresholding
-    var _index = 0;
-    do {
+    // var _index = 0;
+    // do {
 
-      // default color and label is just transparent
-      var _color = [0, 0, 0, 0];
-      var _label = [0, 0, 0, 0];
-      var _fac1 = _volume._max - _volume._min;
+    //   // default color and label is just transparent
+    //   var _color = [0, 0, 0, 0];
+    //   var _label = [0, 0, 0, 0];
+    //   var _fac1 = _volume._max - _volume._min;
 
-      // grab the pixel intensity
-      // slice data is normalized (probably shouldn't ?)
-      // de-normalize it (get real value)
-      var _intensity = (_sliceData[_index] / 255) * _fac1 + _volume._min;
+    //   // grab the pixel intensity
+    //   // slice data is normalized (probably shouldn't ?)
+    //   // de-normalize it (get real value)
+    //   var _intensity = (_sliceData[_index] / 255) * _fac1 + _volume._min;
 
-      // apply window/level
-      var _window = _windowHigh - _windowLow;
-      var _level = _window/2 + _windowLow;
+    //   // apply window/level
+    //   var _window = _windowHigh - _windowLow;
+    //   var _level = _window/2 + _windowLow;
 
-      var _origIntensity = 0;
-      if(_intensity < _level - _window/2 ){
-        _origIntensity = 0;
-      }
-      else if(_intensity > _level + _window/2 ){
-        _origIntensity = 255;
-      }
-      else{
-        _origIntensity  = 255 * (_intensity - (_level - _window / 2))/_window;
-      }
+    //   var _origIntensity = 0;
+    //   if(_intensity < _level - _window/2 ){
+    //     _origIntensity = 0;
+    //   }
+    //   else if(_intensity > _level + _window/2 ){
+    //     _origIntensity = 255;
+    //   }
+    //   else{
+    //     _origIntensity  = 255 * (_intensity - (_level - _window / 2))/_window;
+    //   }
 
-      // apply thresholding
-      if (_intensity >= _lowerThreshold && _intensity <= _upperThreshold) {
+    //   // apply thresholding
+    //   if (_intensity >= _lowerThreshold && _intensity <= _upperThreshold) {
 
-        // current intensity is inside the threshold range so use the real
-        // intensity
+    //     // current intensity is inside the threshold range so use the real
+    //     // intensity
 
-        // map volume scalars to a linear color gradient
-        var maxColor = new goog.math.Vec3(_volume._maxColor[0],
-            _volume._maxColor[1], _volume._maxColor[2]);
-        var minColor = new goog.math.Vec3(_volume._minColor[0],
-            _volume._minColor[1], _volume._minColor[2]);
-        _color = maxColor.scale(_origIntensity).add(
-            minColor.scale(255 - _origIntensity));
+    //     // map volume scalars to a linear color gradient
+    //     var maxColor = new goog.math.Vec3(_volume._maxColor[0],
+    //         _volume._maxColor[1], _volume._maxColor[2]);
+    //     var minColor = new goog.math.Vec3(_volume._minColor[0],
+    //         _volume._minColor[1], _volume._minColor[2]);
+    //     _color = maxColor.scale(_origIntensity).add(
+    //         minColor.scale(255 - _origIntensity));
 
-        // .. and back to an array
-        _color = [Math.floor(_color.x), Math.floor(_color.y),
-                  Math.floor(_color.z), 255];
+    //     // .. and back to an array
+    //     _color = [Math.floor(_color.x), Math.floor(_color.y),
+    //               Math.floor(_color.z), 255];
 
-        if (_currentLabelMap) {
+    //     if (_currentLabelMap) {
 
-          // we have a label map here
-          // check if all labels are shown or only one
-          if (_labelmapShowOnlyColor[3] == -255) {
+    //       // we have a label map here
+    //       // check if all labels are shown or only one
+    //       if (_labelmapShowOnlyColor[3] == -255) {
 
-            // all labels are shown
-            _label = [_labelData[_index], _labelData[_index + 1],
-                      _labelData[_index + 2], _labelData[_index + 3]];
+    //         // all labels are shown
+    //         _label = [_labelData[_index], _labelData[_index + 1],
+    //                   _labelData[_index + 2], _labelData[_index + 3]];
 
-          } else {
+    //       } else {
 
-            // show only the label which matches in color
-            if (X.array.compare(_labelmapShowOnlyColor, _labelData, 0, _index,
-                4)) {
+    //         // show only the label which matches in color
+    //         if (X.array.compare(_labelmapShowOnlyColor, _labelData, 0, _index,
+    //             4)) {
 
-              // this label matches
-              _label = [_labelData[_index], _labelData[_index + 1],
-                        _labelData[_index + 2], _labelData[_index + 3]];
+    //           // this label matches
+    //           _label = [_labelData[_index], _labelData[_index + 1],
+    //                     _labelData[_index + 2], _labelData[_index + 3]];
 
-            }
+    //         }
 
-          }
+    //       }
 
-        }
+    //     }
 
-      }
+    //   }
 
-      _pixels[_index] = _color[0]; // r
-      _pixels[_index + 1] = _color[1]; // g
-      _pixels[_index + 2] = _color[2]; // b
-      _pixels[_index + 3] = _color[3]; // a
-      _labelPixels[_index] = _label[0]; // r
-      _labelPixels[_index + 1] = _label[1]; // g
-      _labelPixels[_index + 2] = _label[2]; // b
-      _labelPixels[_index + 3] = _label[3]; // a
+    //   // _pixels[_index] = _color[0]; // r
+    //   // _pixels[_index + 1] = _color[1]; // g
+    //   // _pixels[_index + 2] = _color[2]; // b
+    //   // _pixels[_index + 3] = _color[3]; // a
+    //   _labelPixels[_index] = _label[0]; // r
+    //   _labelPixels[_index + 1] = _label[1]; // g
+    //   _labelPixels[_index + 2] = _label[2]; // b
+    //   _labelPixels[_index + 3] = _label[3]; // a
 
-      _index += 4; // increase by 4 units for r,g,b,a
+    //   _index += 4; // increase by 4 units for r,g,b,a
 
-    } while (_index < _pixelsLength);
+    // } while (_index < _pixelsLength);
 
     // store the generated image data to the frame buffer context
-    _imageFBContext.putImageData(_imageData, 0, 0);
-    _labelFBContext.putImageData(_labelmapData, 0, 0);
+    // _imageFBContext.putImageData(_imageData, 0, 0);
+    //_labelFBContext.putImageData(_labelmapData, 0, 0);
 
     // cache the current slice index and other values
     // which might require a redraw
@@ -1238,12 +1428,12 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
     this._windowLow = _windowLow;
     this._windowHigh = _windowHigh;
 
-    if (_currentLabelMap) {
+    // if (_currentLabelMap) {
 
-      // only update the setting if we have a labelmap
-      this._labelmapShowOnlyColor = _labelmapShowOnlyColor;
+    //   // only update the setting if we have a labelmap
+    //   this._labelmapShowOnlyColor = _labelmapShowOnlyColor;
 
-    }
+    // }
 
   }
 
@@ -1255,71 +1445,43 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
   // context
   this._context.globalAlpha = 1.0; // draw fully opaque}
 
-
-  // first grab the view matrix which is 4x4 in favor of the 3D renderer
-  var _view = this._camera._view;
   // update transform
   // transform view port
-  this.computeScreenToPlane();
-  // apply transform
-  // http://www.w3.org/TR/2dcontext/#transformations
-  this._context.setTransform(
-    goog.vec.Mat3.getElement(this._screenToPlane, 0, 0),
-    goog.vec.Mat3.getElement(this._screenToPlane, 1, 0),
-    goog.vec.Mat3.getElement(this._screenToPlane, 0, 1),
-    goog.vec.Mat3.getElement(this._screenToPlane, 1, 1),
-    goog.vec.Mat3.getElement(this._screenToPlane, 0, 2),
-    goog.vec.Mat3.getElement(this._screenToPlane, 1, 2)
-  );
-
-  this.computePlaneToTexture();
-  // apply transform
-  // http://www.w3.org/TR/2dcontext/#transformations
-  this._context.transform(
-    goog.vec.Mat3.getElement(this._planeToTexture, 0, 0),
-    goog.vec.Mat3.getElement(this._planeToTexture, 1, 0),
-    goog.vec.Mat3.getElement(this._planeToTexture, 0, 1),
-    goog.vec.Mat3.getElement(this._planeToTexture, 1, 1),
-    goog.vec.Mat3.getElement(this._planeToTexture, 0, 2),
-    goog.vec.Mat3.getElement(this._planeToTexture, 1, 2)
-  );
-
-  // should be working....
   // this.computeScreenToTexture();
-  // // apply transform
-  // // http://www.w3.org/TR/2dcontext/#transformations
-  // this._context.setTransform(
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 0),
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 0),
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 1),
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 1),
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 0, 2),
-  //   goog.vec.Mat3.getElement(this._screenToTexture, 1, 2)
-  // );
+  this._context.setTransform(
+    goog.vec.Mat3.getElement(this._screenToTexture, 0, 0),
+    goog.vec.Mat3.getElement(this._screenToTexture, 1, 0),
+    goog.vec.Mat3.getElement(this._screenToTexture, 0, 1),
+    goog.vec.Mat3.getElement(this._screenToTexture, 1, 1),
+    goog.vec.Mat3.getElement(this._screenToTexture, 0, 2),
+    goog.vec.Mat3.getElement(this._screenToTexture, 1, 2)
+  );
 
   // draw image in middle of the screen
   var _offset_x = -_sliceWidth * this._sliceWidthSpacing / 2;
   var _offset_y = -_sliceHeight * this._sliceHeightSpacing / 2;
 
-  // draw the slice
-  this._context.drawImage(this._frameBuffer, _offset_x, _offset_y, _sliceWidth *
+  // draw the slice centered!
+  this._context.drawImage(this.canvas2, _offset_x, _offset_y, _sliceWidth *
       this._sliceWidthSpacing, _sliceHeight * this._sliceHeightSpacing);
+
+
   // draw the border
   this._context.strokeStyle="#FF0000";
   this._context.strokeRect(_offset_x, _offset_y, _sliceWidth *
       this._sliceWidthSpacing, _sliceHeight * this._sliceHeightSpacing);
 
   // draw the labels with a configured opacity
-  if (_currentLabelMap && _volume._labelmap._visible) {
+  // if (_currentLabelMap && _volume._labelmap._visible) {
 
-    var _labelOpacity = 1;//_volume._labelmap._opacity;
-    this._context.globalAlpha = _labelOpacity; // draw transparent depending on
-    // opacity
-    this._context.drawImage(this._labelFrameBuffer, _offset_x, _offset_y,
-        _sliceWidth * this._sliceWidthSpacing, _sliceHeight *
-            this._sliceHeightSpacing);
+  //   var _labelOpacity = 1;//_volume._labelmap._opacity;
+  //   this._context.globalAlpha = _labelOpacity; // draw transparent depending on
+  //   // opacity
+  //   this._context.drawImage(this._labelFrameBuffer, _offset_x, _offset_y,
+  //       _sliceWidth * this._sliceWidthSpacing, _sliceHeight *
+  //           this._sliceHeightSpacing);
 
-  }
+  // }
 
   // if enabled, show slice navigators
   if (this._config['SLICENAVIGATORS']) {
