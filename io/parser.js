@@ -497,7 +497,18 @@ X.parser.createIJKVolume = function(_data, _dims, _max, _min){
     }
   }
 
-  return [_image, _imageN];
+  // create texture for buffer
+  var _imageRGBA = new Uint8Array(_dims[2] *_dims[1] * _dims[0] * 4);
+  for (_k = 0; _k < _dims[2]; _k++) {
+    for (_j = 0; _j < _dims[1]; _j++) {
+      for (_i = 0; _i < _dims[0]; _i++) {
+      _imageRGBA[4*_i + 4*_dims[0]*_j + 4*_dims[1]*_dims[0]*_k] = _imageRGBA[4*_i + 1 + 4*_dims[0]*_j + 4*_dims[1]*_dims[0]*_k] = _imageRGBA[4*_i + 2 + 4*_dims[0]*_j + 4*_dims[1]*_dims[0]*_k] = _imageN[_k][_j][_i];//255 * i / (_dims[2] *_dims[1] * _dims[0]);
+      _imageRGBA[4*_i + 3 + 4*_dims[0]*_j + 4*_dims[1]*_dims[0]*_k] = 255;
+      }
+    }
+  }
+
+  return [_image, _imageN, _imageRGBA];
 };
 
 /**
@@ -774,6 +785,8 @@ X.parser.reslice2 = function(_sliceOrigin, _sliceXYSpacing, _sliceNormal, _color
   var _solutions = X.parser.intersectionBBoxPlane(_bbox,_sliceOrigin, _sliceNormal);
   var _solutionsIn = _solutions[0];
 
+  window.console.log(_solutionsIn);
+
   // ------------------------------------------
   // MOVE TO 2D SPACE
   // ------------------------------------------
@@ -791,6 +804,8 @@ X.parser.reslice2 = function(_sliceOrigin, _sliceXYSpacing, _sliceNormal, _color
     goog.vec.Mat4.multVec4(_RASToXY, _rasIntersection, _xyIntersection);
     _solutionsXY.push([_xyIntersection[0], _xyIntersection[1], _xyIntersection[2]]);
   }
+
+  window.console.log(_solutionsXY);
 
   // right
   var _right = goog.vec.Vec3.createFloat32FromValues(1, 0, 0);
@@ -952,7 +967,10 @@ X.parser.reslice2 = function(_sliceOrigin, _sliceXYSpacing, _sliceNormal, _color
 
   // setup slice texture
   pixelTexture._rawData = textureForCurrentSlice;
+  sliceXY._solutionsIn = _solutionsIn;
+  sliceXY._solutionsXY = _solutionsXY;
   sliceXY._texture = pixelTexture;
+  sliceXY._origin = _xyCenter;
   // setup slice spacial information
   sliceXY._xyBBox = _xyBBox;
   sliceXY._XYToRAS = _XYToRAS;
@@ -1150,6 +1168,7 @@ X.parser.prototype.reslice = function(object) {
   object._IJKVolume = _IJKVolumes[0];
   // normalized volume
   object._IJKVolumeN = _IJKVolumes[1];
+  object._IJKVolumeRGBA = _IJKVolumes[2];
   X.TIMER(this._classname + '.reslice');
 
   // ------------------------------------------
@@ -1195,9 +1214,9 @@ X.parser.prototype.reslice = function(object) {
 
   // NORMAL
   var _sliceNormal = goog.vec.Vec3.createFloat32FromValues(
-     1.00,
-     0.00,
-     0.00);
+     0.50,
+     0.50,
+     0.50);
   goog.vec.Vec3.normalize(_sliceNormal, _sliceNormal);
   object._childrenInfo[0]._sliceNormal = _sliceNormal;
 

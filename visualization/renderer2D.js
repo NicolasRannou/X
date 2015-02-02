@@ -917,6 +917,9 @@ X.renderer2D.prototype.xy2ijkOptimizedSetup = function(){
 
   this._ijkToScreen4x4 = goog.vec.Mat4.createFloat32();
   goog.vec.Mat4.multMat(_currentSlice._XYToIJK, this._translateToScreen4x4, this._ijkToScreen4x4);
+
+  this._rasToScreen4x4 = goog.vec.Mat4.createFloat32();
+  goog.vec.Mat4.multMat(_currentSlice._XYToRAS, this._translateToScreen4x4, this._rasToScreen4x4);
   // window.console.log(this._textureToScreen4x4);
   // window.console.log(this._textureToScreen);
 
@@ -1212,7 +1215,7 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
       this._windowLow != _windowLow || this._windowHigh != _windowHigh || (_labelmapShowOnlyColor && !X.array
       .compare(_labelmapShowOnlyColor, this._labelmapShowOnlyColor, 0, 0, 4)));
 
-  _redraw_required = true;
+  // _redraw_required = true;
 
   this.computeScreenToTexture();
 
@@ -1257,7 +1260,7 @@ X.renderer2D.prototype.render_ = function(picking, invoked) {
     var _lengthY = Math.abs(screenY[1] - screenY[0]);
     var _stepY = (screenY[0] < screenY[1]) ? 1 : -1;
 
-    var factor = 1;
+    var factor = 10;
     _lengthX /= factor;
     _lengthY /= factor;
     _stepX *= factor;
@@ -1300,8 +1303,50 @@ var imagedata = this.context2.getImageData(0,0,_lengthX, _lengthY);
         var _xMapped = screenX[0] + i*_stepX;
         var _yMapped = screenY[0] + j*_stepY;
 
+        // xytoras
+        var _screenCoordinates4 = goog.vec.Vec4.createFromValues(_xMapped, _yMapped, curSlice._xyBBox[4], 1);
+        var _ras = goog.vec.Vec4.createFloat32();
+        goog.vec.Mat4.multVec4(this._rasToScreen4x4, _screenCoordinates4, _ras);
+
+        //window.console.log(_ras);
+
+        // to IJK!
+        var _IJK = goog.vec.Vec4.createFloat32();
+        goog.vec.Mat4.multVec4(volume._RASToIJK, _ras, _IJK);
+
+        //window.console.log(_IJK);
+
+        // to texture coordinates...
+        var dimensionsIJK = volume._dimensions;
+        sliceIndex = Math.floor(_IJK[2])*(dimensionsIJK[0]*4)*dimensionsIJK[1];
+        rowIndex = Math.floor(_IJK[1])*dimensionsIJK[0]*4;
+        // if(rowIndex<0){
+        //   rowIndex = 0;
+        // }
+        // if(rowIndex>){
+
+        // }
+        // colIndex = Math.floor(_IJK[0])*4;
+        // if()
+        //window.console.log(rowIndex, colIndex);
+        ijkRGBATex = new THREE.DataTexture( volume._IJKVolumeRGBA, volume._IJKVolume[0][0].length * 4, volume._IJKVolume.length * volume._IJKVolume[0].length, THREE.RGBAFormat );
+
+        // textureCoordinates = vec2(colIndex, sliceIndex + rowIndex);
+        //color = ijkRGBATex.image.data();
+
+        //
+        // shader logic
+    //         vec4 ijkPos = rastoijk * vPos;
+    // //convert IJK coordinates to texture coordinates
+    // float sliceIndex = float(ijkPos[2])*(float(dimensionsIJK[0])*float(4))*float(dimensionsIJK[1]);
+    // float rowIndex = ijkPos[1]*(dimensionsIJK[0]*float(4));
+    // float colIndex = ijkPos[0]*float(4);
+    // vec2 textureCoordinates = vec2(colIndex, sliceIndex + rowIndex);
+    // vec3 color = texture2D( ijk, textureCoordinates ).rgb;
+
         // get actual ijk value for this pixel!
         var ijk = this.xy2ijkOptimized(_xMapped, _yMapped, curSlice._xyBBox[4]);
+        //window.console.log(ijk);
         var value = 0;
 
         if(typeof _volume._IJKVolumeN[ijk[2]] != 'undefined' && typeof _volume._IJKVolumeN[ijk[2]][ijk[1]] != 'undefined' && typeof _volume._IJKVolumeN[ijk[2]][ijk[1]][ijk[0]] != 'undefined'){
